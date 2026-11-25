@@ -1,0 +1,18 @@
+// ============================================================
+// Detection 1: Brute force - failed passwords per account, per 5-minute bin
+// Lab: Lab 1 (AD lab: DC01 + CLIENT01)
+// Table: SecurityEvent (in my free Azure Data Explorer cluster the table is named SecurityEvents - rename to match)
+// Events: 4771 = Kerberos pre-authentication failed
+//         Status 0x18 = wrong password (other statuses are different problems)
+// Logic: count wrong-password failures per account and source IP in 5-minute bins,
+//        then keep bins at or above the threshold.
+// Threshold: 5 (tested at 5 and 2; 2 also catches a second test account with 2 failures)
+// Known limits:
+//   - Grouping by IP can miss an attack spread across several source IPs,
+//     each under the threshold. Group by TargetUserName only to catch that.
+//   - bin() uses fixed windows, so an attack can be split across a bin boundary.
+// ============================================================
+SecurityEvent
+| where EventID == 4771 and Status == "0x18"
+| summarize Failures = count() by TargetUserName, IpAddress, bin(TimeGenerated, 5m)
+| where Failures >= 5

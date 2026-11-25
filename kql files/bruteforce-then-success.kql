@@ -1,0 +1,29 @@
+// ============================================================
+// Detection 2: Brute force followed by a successful logon (final version, V3)
+// Lab: Lab 1 (AD lab: DC01 + CLIENT01)
+// Table: SecurityEvent (in my free Azure Data Explorer cluster the table is named SecurityEvents - rename to match)
+// Events: 4771 = Kerberos pre-authentication failed (Status 0x18 = wrong password)
+//         4624 = successful logon
+// Logic: one row per account. Collect failure count, first/last failure and last success,
+//        then compare the times with datetime_diff.
+//        datetime_diff("second", later, earlier) -> positive if the first argument is later.
+//        abs(Gap) is used so that failures arriving AFTER the latest success still count
+//        (threaded tools, or overlapping attack sources).
+// Result on my lab data: npatel, 16 failures, Gap = -94 seconds.
+// Known limits:
+//   - Failure count has NO time window (16 failures here were spread over ~35 minutes).
+//     In a Sentinel analytics rule, bound it with "Look up data from the last" and a
+//     short "Run query every" period.
+//   - 4624 includes machine-account and service logons (most of the noise in my data).
+//     A production version would exclude TargetUserName ending in "$" and restrict LogonType.
+// ============================================================
+SecurityEvent
+| where EventID in (4771, 4624)
+| summarize
+    Failure       = countif(EventID == 4771 and Status == "0x18"),
+    First_failure = minif(TimeGenerated, EventID == 4771 and Status == "0x18"),
+    Last_success  = maxif(TimeGenerated, EventID == 4624),
+    Last_failure  = maxif(TimeGenerated, EventID == 4771 and Status == "0x18")
+    by TargetUserName
+| extend Gap = datetime_diff("second", Last_success, Last_failure)
+| where Failure >= 5 and Last_success > First_failure and abs(Gap) <= 900

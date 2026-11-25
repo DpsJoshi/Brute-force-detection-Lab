@@ -1,0 +1,41 @@
+// ============================================================
+// Brute-force detection: how the query evolved (V1 -> V2 -> V3)
+// Table: SecurityEvent (in my free Azure Data Explorer cluster the table is named SecurityEvents - rename to match)
+// Run each version separately.
+// ============================================================
+
+
+// ---------- V1: failed logons per account ----------
+// Finds password guessing, but cannot tell whether the attacker got in.
+SecurityEvent
+| where EventID == 4771 and Status == "0x18"
+| summarize Failures = count() by TargetUserName
+| where Failures >= 5
+
+
+// ---------- V2: failures plus success, assuming the success comes last ----------
+// Gap > 0 means the success is AFTER every failure.
+// On my lab data it returned NO rows: the last failure was 94 seconds after the last success.
+SecurityEvent
+| where EventID in (4771, 4624)
+| summarize
+    Failure      = countif(EventID == 4771 and Status == "0x18"),
+    Last_success = maxif(TimeGenerated, EventID == 4624),
+    Last_failure = maxif(TimeGenerated, EventID == 4771 and Status == "0x18")
+    by TargetUserName
+| extend Gap = datetime_diff("second", Last_success, Last_failure)
+| where Failure >= 5 and Gap > 0 and Gap <= 900
+
+
+// ---------- V3 (final): allow failures that arrive after the success ----------
+// Same as V2, but with abs(Gap). Returned npatel with Gap = -94.
+SecurityEvent
+| where EventID in (4771, 4624)
+| summarize
+    Failure       = countif(EventID == 4771 and Status == "0x18"),
+    First_failure = minif(TimeGenerated, EventID == 4771 and Status == "0x18"),
+    Last_success  = maxif(TimeGenerated, EventID == 4624),
+    Last_failure  = maxif(TimeGenerated, EventID == 4771 and Status == "0x18")
+    by TargetUserName
+| extend Gap = datetime_diff("second", Last_success, Last_failure)
+| where Failure >= 5 and Last_success > First_failure and abs(Gap) <= 900
